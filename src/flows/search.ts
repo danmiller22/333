@@ -52,7 +52,12 @@ function buildSearchCacheKey(chatId: number, userId: number) {
 
 async function storeResults(ctx: BotContext, results: SearchResult[], query: string) {
   const { chatId, userId } = requireChatUser(ctx);
-  await setCache(ctx.kv, buildSearchCacheKey(chatId, userId), { results, query }, SEARCH_TTL_MS);
+  await setCache(
+    ctx.kv,
+    buildSearchCacheKey(chatId, userId),
+    { results, query },
+    SEARCH_TTL_MS,
+  );
 }
 
 async function loadStoredResults(
@@ -65,7 +70,11 @@ async function loadStoredResults(
   );
 }
 
-async function renderPage(ctx: BotContext, page: number, payload: { results: SearchResult[]; query: string }) {
+async function renderPage(
+  ctx: BotContext,
+  page: number,
+  payload: { results: SearchResult[]; query: string },
+) {
   const pageSize = 10;
   const total = payload.results.length;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -82,19 +91,38 @@ async function renderPage(ctx: BotContext, page: number, payload: { results: Sea
   await ctx.reply(msg, { reply_markup: paginationKeyboard(safePage, totalPages) });
 }
 
+async function computeResultsFromCenter(
+  ctx: BotContext,
+  centerLat: number,
+  centerLng: number,
+): Promise<SearchResult[]> {
+  const shops = await getAllShops(ctx.kv);
+
+  const results: SearchResult[] = [];
+  for (const s of shops) {
+    if (s.lat == null || s.lng == null) continue;
+    const d = haversineMiles(centerLat, centerLng, s.lat, s.lng);
+    if (d <= 100) results.push({ shop: s, distanceMiles: d });
+  }
+
+  results.sort((a, b) => a.distanceMiles - b.distanceMiles);
+  return results;
+}
+
 export async function startSearch(ctx: BotContext): Promise<void> {
   const { chatId, userId } = requireChatUser(ctx);
   const state: FlowState = { flow: "search", step: "awaitQuery" };
   await setFlowState(ctx.kv, chatId, userId, state);
-  await ctx.reply('Send city and state like: "Dallas, TX"', {
-    reply_markup: new InlineKeyboard().text("✖ Cancel", "search:cancel"),
-  });
+  await ctx.reply(
+    'Send city and state like: "Dallas, TX"\nOr send your Telegram location.',
+    { reply_markup: new InlineKeyboard().text("✖ Cancel", "search:cancel") },
+  );
 }
 
 export async function tryInlineSearch(ctx: BotContext, text: string): Promise<boolean> {
   const parsed = parseCityState(text);
   if (!parsed) return false;
-  await runSearch(ctx, parsed.city, parsed.state);
+  await runSearchByCityState(ctx, parsed.city, parsed.state);
   return true;
 }
 
@@ -106,16 +134,44 @@ export async function handleSearchText(
   if (state.step !== "awaitQuery") return false;
   const parsed = parseCityState(text);
   if (!parsed) {
-    await ctx.reply('Format must be "City, ST" (example: Dallas, TX). Try again or Cancel.', {
+    await ctx.reply('Format must be "City, ST" (example: Dallas, TX). Try again, send location, or Cancel.', {
       reply_markup: new InlineKeyboard().text("✖ Cancel", "search:cancel"),
     });
     return true;
   }
-  await runSearch(ctx, parsed.city, parsed.state);
+  await runSearchByCityState(ctx, parsed.city, parsed.state);
   return true;
 }
 
-async function runSearch(ctx: BotContext, city: string, state: string) {
+// NEW: public function for main.ts (location search)
+export async function runSearchByCoords(
+  ctx: BotContext,
+  lat: number,
+  lng: number,
+): Promise<void> {
+  const { chatId, userId } = requireChatUser(ctx);
+
+  await ctx.reply("Searching within 100 miles of your location...");
+
+  const results = await computeResultsFromCenter(ctx, lat, lng);
+
+  // Clear any search state (safety)
+  await clearFlowState(ctx.kv, chatId, userId);
+
+  if (results.length === 0) {
+    await ctx.reply(
+      "No shops found within 100 miles of your location.\n\nSuggestion: add more shops (with full addresses so geocoding works).",
+      { reply_markup: mainMenuKeyboard() },
+    );
+    return;
+  }
+
+  const queryText = "your location";
+  await storeResults(ctx, results, queryText);
+  await renderPage(ctx, 0, { results, query: queryText });
+}
+
+async function runSearchByCityState(ctx: BotContext, city: string, state: string) {
   const { chatId, userId } = requireChatUser(ctx);
 
   await ctx.reply(`Searching within 100 miles of ${city}, ${state}...`);
@@ -130,16 +186,7 @@ async function runSearch(ctx: BotContext, city: string, state: string) {
     return;
   }
 
-  const shops = await getAllShops(ctx.kv);
-
-  const results: SearchResult[] = [];
-  for (const s of shops) {
-    if (s.lat == null || s.lng == null) continue;
-    const d = haversineMiles(geo.lat, geo.lng, s.lat, s.lng);
-    if (d <= 100) results.push({ shop: s, distanceMiles: d });
-  }
-
-  results.sort((a, b) => a.distanceMiles - b.distanceMiles);
+  const results = await computeResultsFromCenter(ctx, geo.lat, geo.lng);
 
   await clearFlowState(ctx.kv, chatId, userId);
 
@@ -177,9 +224,7 @@ export async function handleSearchCallback(ctx: BotContext, data: string): Promi
     const payload = await loadStoredResults(ctx);
     await ctx.answerCallbackQuery();
     if (!payload) {
-      await ctx.reply("Search results expired. Please search again.", {
-        reply_markup: mainMenuKeyboard(),
-      });
+      await ctx.reply("Search results expired. Please search again.", { reply_markup: mainMenuKeyboard() });
       return true;
     }
     await renderPage(ctx, page, payload);
