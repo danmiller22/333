@@ -1,11 +1,21 @@
-import { serve } from "jsr:@std/http/server";
+// src/main.ts
+import { serve } from "jsr:@std/http@1.0.2";
 import { Bot, webhookCallback } from "npm:grammy@1.21.1";
 import type { Context } from "npm:grammy@1.21.1";
 
 import { openKv, getFlowState } from "./kv.ts";
-import { sendMainMenu, mainMenuKeyboard } from "./flows/menu.ts";
-import { startAddShop, handleAddShopText, handleAddShopCallback } from "./flows/addShop.ts";
-import { startSearch, handleSearchText, handleSearchCallback, tryInlineSearch } from "./flows/search.ts";
+import { mainMenuKeyboard } from "./flows/menu.ts";
+import {
+  startAddShop,
+  handleAddShopText,
+  handleAddShopCallback,
+} from "./flows/addShop.ts";
+import {
+  startSearch,
+  handleSearchText,
+  handleSearchCallback,
+  tryInlineSearch,
+} from "./flows/search.ts";
 import { getAllShops } from "./sheets.ts";
 
 type BotContext = Context & { kv: Deno.Kv };
@@ -23,11 +33,11 @@ function webhookPath(): string {
 }
 
 function isDeploy(): boolean {
-  // Present on Deno Deploy
   return Boolean(Deno.env.get("DENO_DEPLOYMENT_ID"));
 }
 
-const USE_POLLING = (Deno.env.get("USE_POLLING") ?? "false").toLowerCase() === "true";
+const USE_POLLING = (Deno.env.get("USE_POLLING") ?? "false").toLowerCase() ===
+  "true";
 
 const kv = await openKv();
 const bot = new Bot<BotContext>(env("TELEGRAM_BOT_TOKEN"));
@@ -38,7 +48,9 @@ bot.use(async (ctx, next) => {
 });
 
 bot.command("start", async (ctx) => {
-  await ctx.reply("Welcome! I can store and search good truck shops.", { reply_markup: mainMenuKeyboard() });
+  await ctx.reply("Welcome! I can store and search good truck shops.", {
+    reply_markup: mainMenuKeyboard(),
+  });
 });
 
 bot.command("help", async (ctx) => {
@@ -106,7 +118,10 @@ bot.on("callback_query:data", async (ctx) => {
   }
 
   // Also allow paging even if no active flow state
-  if (data.startsWith("search:page:") || data === "search:menu" || data === "search:cancel") {
+  if (
+    data.startsWith("search:page:") || data === "search:menu" ||
+    data === "search:cancel"
+  ) {
     const handled = await handleSearchCallback(ctx as BotContext, data);
     if (handled) return;
   }
@@ -140,14 +155,18 @@ bot.on("message:text", async (ctx) => {
   }
 
   // Default fallback
-  await ctx.reply('Use the menu, or send "City, ST" to search.', { reply_markup: mainMenuKeyboard() });
+  await ctx.reply('Use the menu, or send "City, ST" to search.', {
+    reply_markup: mainMenuKeyboard(),
+  });
 });
 
 async function handleLastAdded(ctx: BotContext) {
   try {
     const shops = await getAllShops(ctx.kv);
     if (shops.length === 0) {
-      await ctx.reply("No shops yet. Add one first!", { reply_markup: mainMenuKeyboard() });
+      await ctx.reply("No shops yet. Add one first!", {
+        reply_markup: mainMenuKeyboard(),
+      });
       return;
     }
     const last = shops.slice(-10).reverse();
@@ -155,10 +174,14 @@ async function handleLastAdded(ctx: BotContext) {
       const services = s.servicesCSV ? ` | Services: ${s.servicesCSV}` : "";
       return `${i + 1}) ${s.shopName} — ${s.city}, ${s.state} | Phone: ${s.phone}${services}`;
     });
-    await ctx.reply(["Last 10 added:", "", ...lines].join("\n"), { reply_markup: mainMenuKeyboard() });
+    await ctx.reply(["Last 10 added:", "", ...lines].join("\n"), {
+      reply_markup: mainMenuKeyboard(),
+    });
   } catch (e) {
     console.error("Last added error:", e);
-    await ctx.reply("Error reading the sheet. Check logs.", { reply_markup: mainMenuKeyboard() });
+    await ctx.reply("Error reading the sheet. Check logs.", {
+      reply_markup: mainMenuKeyboard(),
+    });
   }
 }
 
