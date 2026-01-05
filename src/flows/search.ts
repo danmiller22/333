@@ -1,3 +1,4 @@
+// src/flows/search.ts
 import type { Context } from "npm:grammy@1.21.1";
 import { InlineKeyboard } from "npm:grammy@1.21.1";
 import type { FlowState, SearchResult } from "../types.ts";
@@ -54,9 +55,14 @@ async function storeResults(ctx: BotContext, results: SearchResult[], query: str
   await setCache(ctx.kv, buildSearchCacheKey(chatId, userId), { results, query }, SEARCH_TTL_MS);
 }
 
-async function loadStoredResults(ctx: BotContext): Promise<{ results: SearchResult[]; query: string } | null> {
+async function loadStoredResults(
+  ctx: BotContext,
+): Promise<{ results: SearchResult[]; query: string } | null> {
   const { chatId, userId } = requireChatUser(ctx);
-  return await getCache<{ results: SearchResult[]; query: string }>(ctx.kv, buildSearchCacheKey(chatId, userId));
+  return await getCache<{ results: SearchResult[]; query: string }>(
+    ctx.kv,
+    buildSearchCacheKey(chatId, userId),
+  );
 }
 
 async function renderPage(ctx: BotContext, page: number, payload: { results: SearchResult[]; query: string }) {
@@ -171,7 +177,9 @@ export async function handleSearchCallback(ctx: BotContext, data: string): Promi
     const payload = await loadStoredResults(ctx);
     await ctx.answerCallbackQuery();
     if (!payload) {
-      await ctx.reply("Search results expired. Please search again.", { reply_markup: mainMenuKeyboard() });
+      await ctx.reply("Search results expired. Please search again.", {
+        reply_markup: mainMenuKeyboard(),
+      });
       return true;
     }
     await renderPage(ctx, page, payload);
