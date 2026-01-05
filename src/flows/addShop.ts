@@ -152,4 +152,319 @@ async function promptForStep(
         reply_markup: confirmKeyboard(),
       });
       break;
-    case "editF
+    case "editField":
+      await ctx.reply("What do you want to edit?", {
+        reply_markup: editFieldsKeyboard(),
+      });
+      break;
+    default:
+      await ctx.reply("Something went wrong. Returning to menu.");
+      await clearFlowState(
+        ctx.kv,
+        requireChatUser(ctx).chatId,
+        requireChatUser(ctx).userId,
+      );
+      await sendMainMenu(ctx);
+  }
+}
+
+export async function startAddShop(ctx: BotContext): Promise<void> {
+  const { chatId, userId } = requireChatUser(ctx);
+  const state: FlowState = {
+    flow: "add",
+    step: "shopName",
+    data: {},
+    servicesSelected: [],
+  };
+  await setFlowState(ctx.kv, chatId, userId, state);
+  await ctx.reply("Add a new shop (wizard). You can cancel anytime.", {
+    reply_markup: cancelKeyboard(),
+  });
+  await promptForStep(ctx, state as FlowState & { flow: "add" });
+}
+
+export async function handleAddShopText(
+  ctx: BotContext,
+  state: FlowState & { flow: "add" },
+  text: string,
+): Promise<boolean> {
+  const { chatId, userId } = requireChatUser(ctx);
+  const t = text.trim();
+
+  switch (state.step) {
+    case "shopName":
+      if (!t) {
+        await ctx.reply("Shop name cannot be empty. Try again:", {
+          reply_markup: cancelKeyboard(),
+        });
+        return true;
+      }
+      state.data.shopName = t;
+      state.step = "address";
+      await setFlowState(ctx.kv, chatId, userId, state);
+      await promptForStep(ctx, state);
+      return true;
+
+    case "address":
+      if (!t) {
+        await ctx.reply("Address cannot be empty. Try again:", {
+          reply_markup: cancelKeyboard(),
+        });
+        return true;
+      }
+      state.data.address = t;
+      state.step = "city";
+      await setFlowState(ctx.kv, chatId, userId, state);
+      await promptForStep(ctx, state);
+      return true;
+
+    case "city":
+      if (!t) {
+        await ctx.reply("City cannot be empty. Try again:", {
+          reply_markup: cancelKeyboard(),
+        });
+        return true;
+      }
+      state.data.city = t;
+      state.step = "state";
+      await setFlowState(ctx.kv, chatId, userId, state);
+      await promptForStep(ctx, state);
+      return true;
+
+    case "state": {
+      const st = normalizeState(t);
+      if (!isValidState(st)) {
+        await ctx.reply("State must be 2 letters (example: TX). Try again:", {
+          reply_markup: cancelKeyboard(),
+        });
+        return true;
+      }
+      state.data.state = st;
+      state.step = "phone";
+      await setFlowState(ctx.kv, chatId, userId, state);
+      await promptForStep(ctx, state);
+      return true;
+    }
+
+    case "phone":
+      if (!t) {
+        await ctx.reply("Phone cannot be empty. Try again:", {
+          reply_markup: cancelKeyboard(),
+        });
+        return true;
+      }
+      state.data.phone = t;
+      state.step = "contactPerson";
+      await setFlowState(ctx.kv, chatId, userId, state);
+      await promptForStep(ctx, state);
+      return true;
+
+    case "contactPerson":
+      if (!t) {
+        await ctx.reply("Contact person cannot be empty. Try again:", {
+          reply_markup: cancelKeyboard(),
+        });
+        return true;
+      }
+      state.data.contactPerson = t;
+      state.step = "staffType";
+      await setFlowState(ctx.kv, chatId, userId, state);
+      await promptForStep(ctx, state);
+      return true;
+
+    case "notes":
+      state.data.notes = t === "-" ? "" : t;
+      state.step = "confirm";
+      await setFlowState(ctx.kv, chatId, userId, state);
+      await promptForStep(ctx, state);
+      return true;
+
+    default:
+      return false;
+  }
+}
+
+async function finalizeAndSave(ctx: BotContext, state: FlowState & { flow: "add" }) {
+  const { chatId, userId } = requireChatUser(ctx);
+
+  const required: (keyof ShopInput)[] = [
+    "shopName",
+    "address",
+    "city",
+    "state",
+    "phone",
+    "contactPerson",
+    "staffType",
+  ];
+
+  for (const k of required) {
+    if (!state.data[k]) {
+      await ctx.reply(`Missing required field: ${k}. Please edit and try again.`);
+      state.step = "editField";
+      await setFlowState(ctx.kv, chatId, userId, state);
+      await promptForStep(ctx, state);
+      return;
+    }
+  }
+
+  if (state.servicesSelected.length === 0) {
+    await ctx.reply(
+      "No services selected. If that's correct, tap Save again. Or Edit to add services.",
+    );
+    return;
+  }
+
+  const createdAtISO = new Date().toISOString();
+
+  const fullGeocodeQuery = `${state.data.address}, ${state.data.city}, ${state.data.state}`;
+  let lat = "";
+  let lng = "";
+  let notes = state.data.notes ?? "";
+
+  try {
+    const geo = await geocodeAddress(ctx.kv, fullGeocodeQuery);
+    if (geo) {
+      lat = String(geo.lat);
+      lng = String(geo.lng);
+    } else {
+      const warn = "WARNING: Geocoding failed; lat/lng left empty.";
+      notes = notes ? `${notes} | ${warn}` : warn;
+    }
+  } catch (e) {
+    const warn = `WARNING: Geocoding error; lat/lng left empty. (${String(e)})`;
+    notes = notes ? `${notes} | ${warn}` : warn;
+  }
+
+  const row: string[] = [
+    createdAtISO,
+    state.data.shopName!,
+    state.data.address!,
+    state.data.city!,
+    state.data.state!,
+    state.data.phone!,
+    state.data.contactPerson!,
+    state.data.staffType as string,
+    state.servicesSelected.join(", "),
+    notes,
+    lat,
+    lng,
+  ];
+
+  await appendShopRow(ctx.kv, row);
+
+  await clearFlowState(ctx.kv, chatId, userId);
+
+  await ctx.reply("✅ Saved to Google Sheets.");
+  await ctx.reply("Main menu:", { reply_markup: mainMenuKeyboard() });
+}
+
+export async function handleAddShopCallback(
+  ctx: BotContext,
+  state: FlowState & { flow: "add" },
+  data: string,
+): Promise<boolean> {
+  const { chatId, userId } = requireChatUser(ctx);
+
+  if (data === CANCEL_CB || data === "add:confirm_cancel") {
+    await clearFlowState(ctx.kv, chatId, userId);
+    await ctx.answerCallbackQuery();
+    await ctx.reply("Cancelled. Main menu:", { reply_markup: mainMenuKeyboard() });
+    return true;
+  }
+
+  if (data.startsWith("add:staff:")) {
+    const staff = data.replace("add:staff:", "") as StaffType;
+    state.data.staffType = staff;
+    state.step = "services";
+    await setFlowState(ctx.kv, chatId, userId, state);
+    await ctx.answerCallbackQuery();
+    await promptForStep(ctx, state);
+    return true;
+  }
+
+  if (data.startsWith("add:toggle_service:")) {
+    const svc = data.replace("add:toggle_service:", "") as Service;
+    const set = new Set(state.servicesSelected);
+    if (set.has(svc)) set.delete(svc);
+    else set.add(svc);
+    state.servicesSelected = Array.from(set);
+    await setFlowState(ctx.kv, chatId, userId, state);
+    await ctx.answerCallbackQuery();
+    try {
+      await ctx.editMessageReplyMarkup({
+        reply_markup: servicesKeyboard(state.servicesSelected),
+      });
+    } catch {
+      // ignore
+    }
+    return true;
+  }
+
+  if (data === "add:services_done") {
+    if (state.servicesSelected.length === 0) {
+      await ctx.answerCallbackQuery({ text: "Select at least one service (or choose Other)." });
+      return true;
+    }
+    state.step = "notes";
+    await setFlowState(ctx.kv, chatId, userId, state);
+    await ctx.answerCallbackQuery();
+    await promptForStep(ctx, state);
+    return true;
+  }
+
+  if (data === "add:confirm_edit") {
+    state.step = "editField";
+    await setFlowState(ctx.kv, chatId, userId, state);
+    await ctx.answerCallbackQuery();
+    await promptForStep(ctx, state);
+    return true;
+  }
+
+  if (data === "add:confirm_save") {
+    await ctx.answerCallbackQuery();
+    await finalizeAndSave(ctx, state);
+    return true;
+  }
+
+  if (data.startsWith("add:edit_field:")) {
+    const field = data.replace("add:edit_field:", "");
+
+    if (field === "back") {
+      state.step = "confirm";
+      await setFlowState(ctx.kv, chatId, userId, state);
+      await ctx.answerCallbackQuery();
+      await promptForStep(ctx, state);
+      return true;
+    }
+
+    await ctx.answerCallbackQuery();
+
+    switch (field) {
+      case "shopName":
+      case "address":
+      case "city":
+      case "state":
+      case "phone":
+      case "contactPerson":
+      case "notes":
+        state.step = field as any;
+        await setFlowState(ctx.kv, chatId, userId, state);
+        await promptForStep(ctx, state);
+        return true;
+      case "staffType":
+        state.step = "staffType";
+        await setFlowState(ctx.kv, chatId, userId, state);
+        await promptForStep(ctx, state);
+        return true;
+      case "services":
+        state.step = "services";
+        await setFlowState(ctx.kv, chatId, userId, state);
+        await promptForStep(ctx, state);
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  return false;
+}
