@@ -1,0 +1,8 @@
+{
+  "tasks": {
+    "dev": "deno run -A --watch src/main.ts",
+    "fmt": "deno fmt",
+    "lint": "deno lint",
+    "check": "deno check src/main.ts"
+  }
+}
