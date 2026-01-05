@@ -1,3 +1,4 @@
+// src/types.ts
 export type StaffType = "Russians" | "Uzbeks" | "Americans" | "Mixed/Other";
 
 export const STAFF_TYPES: StaffType[] = [
@@ -43,16 +44,16 @@ export type AddStep =
 
 export type FlowState =
   | {
-      flow: "add";
-      step: AddStep;
-      data: Partial<ShopInput>;
-      servicesSelected: Service[];
-    }
+    flow: "add";
+    step: AddStep;
+    data: Partial<ShopInput>;
+    servicesSelected: Service[];
+  }
   | {
-      flow: "search";
-      step: "awaitQuery";
-      queryText?: string;
-    };
+    flow: "search";
+    step: "awaitQuery";
+    queryText?: string;
+  };
 
 export interface ShopInput {
   shopName: string;
