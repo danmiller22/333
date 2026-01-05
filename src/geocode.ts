@@ -1,3 +1,4 @@
+// src/geocode.ts
 import { delay } from "jsr:@std/async/delay";
 import type { GeocodeResult } from "./types.ts";
 import { getCache, setCache } from "./kv.ts";
@@ -53,7 +54,9 @@ async function nominatimSearch(q: string): Promise<GeocodeResult | null> {
     return null;
   }
 
-  const data = (await res.json()) as Array<{ lat: string; lon: string; display_name?: string }>;
+  const data = (await res.json()) as Array<
+    { lat: string; lon: string; display_name?: string }
+  >;
   if (!data?.length) return null;
 
   const item = data[0];
