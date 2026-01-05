@@ -1,9 +1,8 @@
 // src/main.ts
-import { serve } from "jsr:@std/http@1.0.2";
 import { Bot, webhookCallback } from "npm:grammy@1.21.1";
 import type { Context } from "npm:grammy@1.21.1";
 
-import { openKv, getFlowState } from "./kv.ts";
+import { openKv, getFlowState, clearFlowState } from "./kv.ts";
 import { mainMenuKeyboard } from "./flows/menu.ts";
 import {
   startAddShop,
@@ -15,6 +14,7 @@ import {
   handleSearchText,
   handleSearchCallback,
   tryInlineSearch,
+  runSearchByCoords,
 } from "./flows/search.ts";
 import { getAllShops } from "./sheets.ts";
 
@@ -59,6 +59,7 @@ bot.command("help", async (ctx) => {
       "How to use:",
       "- Use the buttons to Add a shop or Search (100 miles).",
       '- You can also send "City, ST" directly (example: Dallas, TX).',
+      "- Or send your Telegram location and I will search nearby.",
       "",
       "Data is stored in Google Sheets.",
     ].join("\n"),
@@ -92,6 +93,7 @@ bot.on("callback_query:data", async (ctx) => {
         "Help:",
         "- Add shop: guided wizard (buttons + prompts).",
         '- Search: send "City, ST" and I list shops within 100 miles.',
+        "- You can also send your Telegram location to search nearby.",
         "- Last added: shows the last 10 entries.",
       ].join("\n"),
       { reply_markup: mainMenuKeyboard() },
@@ -99,7 +101,6 @@ bot.on("callback_query:data", async (ctx) => {
     return;
   }
 
-  // Flow-specific callbacks
   const chatId = ctx.chat?.id;
   const userId = ctx.from?.id;
   if (!chatId || !userId) {
@@ -117,7 +118,7 @@ bot.on("callback_query:data", async (ctx) => {
     if (handled) return;
   }
 
-  // Also allow paging even if no active flow state
+  // Paging callbacks can work without an active flow state
   if (
     data.startsWith("search:page:") || data === "search:menu" ||
     data === "search:cancel"
@@ -129,6 +130,29 @@ bot.on("callback_query:data", async (ctx) => {
   await ctx.answerCallbackQuery({ text: "No action for that button." });
 });
 
+// NEW: Telegram location -> immediate search (unless user is mid "add shop")
+bot.on("message:location", async (ctx) => {
+  const chatId = ctx.chat?.id;
+  const userId = ctx.from?.id;
+  const loc = ctx.message?.location;
+  if (!chatId || !userId || !loc) return;
+
+  const existingState = await getFlowState(kv, chatId, userId);
+
+  if (existingState?.flow === "add") {
+    await ctx.reply(
+      "You're currently adding a shop. Please finish the wizard or tap Cancel.",
+      { reply_markup: mainMenuKeyboard() },
+    );
+    return;
+  }
+
+  // If user was in search state, clear it before running
+  if (existingState) await clearFlowState(kv, chatId, userId);
+
+  await runSearchByCoords(ctx as BotContext, loc.latitude, loc.longitude);
+});
+
 bot.on("message:text", async (ctx) => {
   const chatId = ctx.chat?.id;
   const userId = ctx.from?.id;
@@ -136,28 +160,36 @@ bot.on("message:text", async (ctx) => {
 
   if (!chatId || !userId) return;
 
-  // If the user sends City, ST at any time, attempt a search shortcut (unless they're in add flow)
   const existingState = await getFlowState(kv, chatId, userId);
 
-  if (!existingState) {
+  // City, ST shortcut anytime (when not inside add flow)
+  if (!existingState || existingState.flow !== "add") {
     const didInlineSearch = await tryInlineSearch(ctx as BotContext, text);
     if (didInlineSearch) return;
   }
 
   if (existingState?.flow === "add") {
-    const handled = await handleAddShopText(ctx as BotContext, existingState, text);
+    const handled = await handleAddShopText(
+      ctx as BotContext,
+      existingState,
+      text,
+    );
     if (handled) return;
   }
 
   if (existingState?.flow === "search") {
-    const handled = await handleSearchText(ctx as BotContext, existingState, text);
+    const handled = await handleSearchText(
+      ctx as BotContext,
+      existingState,
+      text,
+    );
     if (handled) return;
   }
 
-  // Default fallback
-  await ctx.reply('Use the menu, or send "City, ST" to search.', {
-    reply_markup: mainMenuKeyboard(),
-  });
+  await ctx.reply(
+    'Use the menu, send "City, ST", or send your Telegram location to search nearby.',
+    { reply_markup: mainMenuKeyboard() },
+  );
 });
 
 async function handleLastAdded(ctx: BotContext) {
@@ -191,14 +223,13 @@ if (!isDeploy() && USE_POLLING) {
 } else {
   const path = webhookPath();
   const secret = Deno.env.get("TELEGRAM_SECRET_TOKEN") ?? "";
-
   const handleUpdate = webhookCallback(bot, "std/http");
 
-  console.log("Starting webhook server on Deno Deploy-compatible HTTP server.");
+  console.log("Starting webhook server (Deno.serve).");
   console.log("Webhook path:", path);
   if (secret) console.log("Secret token header check enabled.");
 
-  serve(async (req) => {
+  Deno.serve(async (req) => {
     const url = new URL(req.url);
 
     if (url.pathname === "/health") return new Response("ok");
