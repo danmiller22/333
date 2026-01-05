@@ -1,3 +1,4 @@
+// src/sheets.ts
 import { getCache, setCache, delCache } from "./kv.ts";
 import type { ShopRow } from "./types.ts";
 
@@ -41,11 +42,15 @@ function loadServiceAccount(): ServiceAccount {
   const b64 = Deno.env.get("GOOGLE_SERVICE_ACCOUNT_B64");
   if (!b64) throw new Error("GOOGLE_SERVICE_ACCOUNT_B64 env var is required");
 
-  const jsonStr = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
+  const jsonStr = new TextDecoder().decode(
+    Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)),
+  );
   const sa = JSON.parse(jsonStr) as ServiceAccount;
 
   if (!sa.client_email || !sa.private_key) {
-    throw new Error("Service account JSON must include client_email and private_key");
+    throw new Error(
+      "Service account JSON must include client_email and private_key",
+    );
   }
   return sa;
 }
@@ -66,7 +71,10 @@ function pemToArrayBuffer(pem: string): ArrayBuffer {
   return bytes.buffer;
 }
 
-async function signJwtRS256(privateKeyPem: string, data: string): Promise<string> {
+async function signJwtRS256(
+  privateKeyPem: string,
+  data: string,
+): Promise<string> {
   const key = await crypto.subtle.importKey(
     "pkcs8",
     pemToArrayBuffer(privateKeyPem),
@@ -83,7 +91,10 @@ async function signJwtRS256(privateKeyPem: string, data: string): Promise<string
 }
 
 async function getAccessToken(kv: Deno.Kv): Promise<string> {
-  const cached = await getCache<{ token: string; expiresAtMs: number }>(kv, ["google", "token"]);
+  const cached = await getCache<{ token: string; expiresAtMs: number }>(kv, [
+    "google",
+    "token",
+  ]);
   if (cached && cached.expiresAtMs > Date.now() + 60_000) {
     return cached.token;
   }
@@ -91,7 +102,9 @@ async function getAccessToken(kv: Deno.Kv): Promise<string> {
   const sa = loadServiceAccount();
   const nowSec = Math.floor(Date.now() / 1000);
 
-  const header = base64UrlEncode(new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT" })));
+  const header = base64UrlEncode(
+    new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT" })),
+  );
   const payload = base64UrlEncode(
     new TextEncoder().encode(
       JSON.stringify({
@@ -119,13 +132,24 @@ async function getAccessToken(kv: Deno.Kv): Promise<string> {
   });
 
   if (!res.ok) {
-    throw new Error(`Google OAuth token error: ${res.status} ${await res.text()}`);
+    throw new Error(
+      `Google OAuth token error: ${res.status} ${await res.text()}`,
+    );
   }
 
-  const data = (await res.json()) as { access_token: string; expires_in: number; token_type: string };
+  const data = (await res.json()) as {
+    access_token: string;
+    expires_in: number;
+    token_type: string;
+  };
   const expiresAtMs = Date.now() + (data.expires_in ?? 3600) * 1000;
 
-  await setCache(kv, ["google", "token"], { token: data.access_token, expiresAtMs }, (data.expires_in - 60) * 1000);
+  await setCache(
+    kv,
+    ["google", "token"],
+    { token: data.access_token, expiresAtMs },
+    (data.expires_in - 60) * 1000,
+  );
   return data.access_token;
 }
 
@@ -135,7 +159,8 @@ async function sheetsFetch(
   init?: RequestInit,
 ): Promise<Response> {
   const token = await getAccessToken(kv);
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId()}${path}`;
+  const url =
+    `https://sheets.googleapis.com/v4/spreadsheets/${sheetId()}${path}`;
   return await fetch(url, {
     ...init,
     headers: {
@@ -160,7 +185,11 @@ async function readValues(kv: Deno.Kv, rangeA1: string): Promise<string[][]> {
   return json.values ?? [];
 }
 
-async function updateValues(kv: Deno.Kv, rangeA1: string, values: string[][]): Promise<void> {
+async function updateValues(
+  kv: Deno.Kv,
+  rangeA1: string,
+  values: string[][],
+): Promise<void> {
   const res = await sheetsFetch(
     kv,
     `/values/${encodeURIComponent(rangeA1)}?valueInputOption=RAW`,
@@ -184,16 +213,16 @@ export async function ensureHeaderRow(kv: Deno.Kv): Promise<void> {
   if (isEmpty) {
     await updateValues(kv, range, [Array.from(HEADER)]);
   } else if (!matches) {
-    // Don't overwrite an existing different header: safer to fail loudly.
     throw new Error(
-      `Sheet header mismatch on ${range}. Expected: ${HEADER.join(", ")}. Found: ${row.join(", ")}`,
+      `Sheet header mismatch on ${range}. Expected: ${HEADER.join(", ")}. Found: ${
+        row.join(", ")
+      }`,
     );
   }
 }
 
 function parseRow(row: string[]): ShopRow | null {
   if (!row?.length) return null;
-  // If header row, skip
   if (row[0] === "createdAtISO") return null;
 
   const latRaw = row[10] ?? "";
@@ -240,10 +269,7 @@ export async function invalidateShopsCache(kv: Deno.Kv): Promise<void> {
   await delCache(kv, ["sheet", "shops", "rows"]);
 }
 
-export async function appendShopRow(
-  kv: Deno.Kv,
-  row: string[],
-): Promise<void> {
+export async function appendShopRow(kv: Deno.Kv, row: string[]): Promise<void> {
   if (row.length !== 12) {
     throw new Error(`appendShopRow expects 12 columns, got ${row.length}`);
   }
@@ -266,6 +292,5 @@ export async function appendShopRow(
     throw new Error(`Sheets append error: ${res.status} ${await res.text()}`);
   }
 
-  // Invalidate cached rows since the sheet changed
   await invalidateShopsCache(kv);
 }
